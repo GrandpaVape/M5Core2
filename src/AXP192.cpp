@@ -4,17 +4,25 @@ AXP192::AXP192()
 {
 }
 
+// Will be deprecated
 void AXP192::begin(mbus_mode_t mode)
+{
+    begin();
+}
+
+void AXP192::begin()
 {
 
     Wire1.begin(21, 22);
     Wire1.setClock(400000);
 
+    TouchReset(false);
+
     //AXP192 30H
     Write1Byte(0x30, (Read8bit(0x30) & 0x04) | 0X02);
     Serial.printf("axp: vbus limit off\n");
 
-    //AXP192 GPIO1:OD OUTPUT
+    //AXP192 GPIO1:OD OUTPUT ( GPIO1 = Touch RST )
     Write1Byte(0x92, Read8bit(0x92) & 0xf8);
     Serial.printf("axp: gpio1 init\n");
 
@@ -35,12 +43,13 @@ void AXP192::begin(mbus_mode_t mode)
     SetLDOVoltage(2, 3300); //Periph power voltage preset (LCD_logic, SD card)
     Serial.printf("axp: lcd logic and sdcard voltage preset to 3.3v\n");
 
-    SetLDOVoltage(3, 2000); //Vibrator power voltage preset
+    SetLDOVoltage(3, 3000); // LCD backlight ( for Tough )
     Serial.printf("axp: vibrator voltage preset to 2v\n");
 
     SetLDOEnable(2, true);
-    SetDCDC3(true); // LCD backlight
-    SetLed(true);
+    SetLDOEnable(3, true);
+
+    TouchReset(true);
 
     SetCHGCurrent(kCHG_100mA);
     //SetAxpPriphPower(1);
@@ -62,7 +71,16 @@ void AXP192::begin(mbus_mode_t mode)
     // I2C_WriteByteDataAt(0X15,0XFE,0XFF);
 
     //  bus power mode_output
-    SetBusPowerMode(mode);
+    // axp: check v-bus status
+    if(Read8bit(0x00) & 0x08) {
+        Write1Byte(0x30, Read8bit(0x30) | 0x80);
+        // if v-bus can use, disable M-Bus 5V output to input
+        SetBusPowerMode(kMBusModeInput);
+    }else{
+        // if not, enable M-Bus 5V output
+        SetBusPowerMode(kMBusModeOutput);
+    }
+
 }
 
 void AXP192::Write1Byte(uint8_t Addr, uint8_t Data)
@@ -246,10 +264,21 @@ void AXP192::PrepareToSleep(void)
     SetAdcState(false);
 
     // Turn LED off
-    SetLed(false);
+    TouchReset(false);
 
     // Turn LCD backlight off
     SetDCDC3(false);
+}
+
+// Get current battery level
+float AXP192::GetBatteryLevel(void)
+{
+    const float batVoltage = GetBatVoltage();
+    const float batPercentage = 
+        (batVoltage < 3.248088) 
+        ? (0) 
+        : (batVoltage - 3.120712) * 100;       
+    return (batPercentage <= 100) ? batPercentage : 100;    
 }
 
 void AXP192::RestoreFromLightSleep(void)
@@ -258,7 +287,7 @@ void AXP192::RestoreFromLightSleep(void)
     SetDCDC3(true);
 
     // Turn LED on
-    SetLed(true);
+    TouchReset(true);
 
     // Enable ADCs
     SetAdcState(true);
@@ -555,7 +584,7 @@ void AXP192::SetBusPowerMode(uint8_t state)
     }
 }
 
-void AXP192::SetLed(uint8_t state)
+void AXP192::TouchReset(uint8_t state)
 {
     uint8_t reg_addr=0x94;
     uint8_t data;
@@ -563,11 +592,11 @@ void AXP192::SetLed(uint8_t state)
 
     if(state)
     {
-      data=data&0XFD;
+      data|=0X02;
     }
     else
     {
-      data|=0X02;
+      data=data&0XFD;
     }
 
     Write1Byte(reg_addr,data);
